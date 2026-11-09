@@ -126,3 +126,27 @@ test('records both failed attempts exactly once', async (t) => {
   ]);
   assert.deepEqual(durations.map(({ model, outcome }) => ({ model, outcome })), calls.map(({ model, outcome }) => ({ model, outcome })));
 });
+test('fallback TTL config defaults invalid values and accepts positive fractions', async () => {
+  const original = process.env.FALLBACK_TTL_MINUTES;
+  let importId = 0;
+  const loadTtl = async (value, isSet = true) => {
+    if (isSet) process.env.FALLBACK_TTL_MINUTES = value;
+    else delete process.env.FALLBACK_TTL_MINUTES;
+    try {
+      const models = await import(`../src/models.js?ttl-test=${importId++}`);
+      return models.FALLBACK_TTL_MS;
+    } finally {
+      if (original === undefined) delete process.env.FALLBACK_TTL_MINUTES;
+      else process.env.FALLBACK_TTL_MINUTES = original;
+    }
+  };
+
+  for (const [value, isSet] of [
+    [undefined, false], ['', true], ['not-a-number', true], ['Infinity', true],
+    ['1e308', true], ['-1', true], ['0', true]
+  ]) {
+    assert.equal(await loadTtl(value, isSet), 10 * 60 * 1000, `value: ${value}`);
+  }
+  assert.equal(await loadTtl('1'), 60 * 1000);
+  assert.equal(await loadTtl('0.5'), 30 * 1000);
+});
