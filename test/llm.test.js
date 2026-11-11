@@ -1,5 +1,6 @@
 import { test, after, afterEach } from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 // Never export test traces to a developer's configured collector.
 delete process.env.SIGNOZ_OTLP_ENDPOINT;
 delete process.env.OTEL_EXPORTER_OTLP_ENDPOINT;
@@ -149,4 +150,33 @@ test('fallback TTL config defaults invalid values and accepts positive fractions
   }
   assert.equal(await loadTtl('1'), 60 * 1000);
   assert.equal(await loadTtl('0.5'), 30 * 1000);
+});
+
+test('chat expires a fallback pin using a configured fractional TTL', () => {
+  const script = `
+import assert from 'node:assert/strict';
+import { chat } from './src/llm.js';
+import { FALLBACK_TTL_MS, promoted, ROLES } from './src/models.js';
+
+assert.equal(FALLBACK_TTL_MS, 30_000);
+process.env.HF_TOKEN = 'synthetic-test-token';
+promoted.planner = {
+  model: ROLES.planner.fallback,
+  at: Date.now() - 45_000,
+  by: 'test'
+};
+const calls = [];
+globalThis.fetch = async (_url, init) => {
+  calls.push(JSON.parse(init.body).model);
+  const payload = { choices: [{ delta: { content: 'recovered' }, finish_reason: 'stop' }] };
+  return new Response('data: ' + JSON.stringify(payload) + '\\n\\ndata: [DONE]\\n\\n');
+};
+assert.equal(await chat('planner', []), 'recovered');
+assert.deepEqual(calls, [ROLES.planner.primary]);
+assert.equal(promoted.planner, undefined);
+`;
+  execFileSync(process.execPath, ['--input-type=module', '--eval', script], {
+    env: { ...process.env, FALLBACK_TTL_MINUTES: '0.5', HF_TOKEN: 'synthetic-test-token' },
+    encoding: 'utf8'
+  });
 });
